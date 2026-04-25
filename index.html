@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>PowerSched - Energy Aware CPU Scheduler</title>
+
+<style>
+body{
+    margin:0;
+    font-family:Segoe UI;
+    background:#050508;
+    color:#eee;
+}
+
+/* NAV */
+.navbar{
+    display:flex;
+    justify-content:space-between;
+    padding:12px 20px;
+    background:#0a0a0f;
+    border-bottom:1px solid #222;
+}
+
+.title{
+    color:#7c3aed;
+    font-weight:bold;
+}
+
+/* CONTROLS */
+.controls{
+    display:flex;
+    gap:10px;
+    justify-content:center;
+    padding:10px;
+}
+
+button{
+    padding:8px 14px;
+    background:#1a1a24;
+    border:1px solid #333;
+    color:white;
+    cursor:pointer;
+}
+
+button:hover{ background:#7c3aed; }
+
+/* LAYOUT */
+.container{
+    display:grid;
+    grid-template-columns:300px 1fr;
+    gap:20px;
+    padding:20px;
+}
+
+/* TASK CARDS */
+.task{
+    background:#111118;
+    padding:10px;
+    margin-bottom:10px;
+    border-radius:8px;
+    border-left:5px solid gray;
+}
+
+.running{ border-left:5px solid #00ff9c; }
+.waiting{ border-left:5px solid orange; }
+.idle{ border-left:5px solid red; }
+
+/* GRAPH */
+.graph{
+    background:#0a0a0f;
+    padding:20px;
+    border-radius:10px;
+}
+canvas{
+    width:100%;
+    height:250px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="navbar">
+    <div class="title">⚡ PowerSched</div>
+    <div>
+        Energy: <span id="energy">0</span>W |
+        Temp: <span id="temp">30</span>°C |
+        Freq: <span id="freq">1.0</span>GHz
+    </div>
+</div>
+
+<div class="controls">
+    <button onclick="sys.addTask()">+ Task</button>
+    <button onclick="sys.start()">▶ Start</button>
+    <button onclick="sys.stop()">⏹ Stop</button>
+    <button onclick="sys.performance()">🔥 Performance</button>
+    <button onclick="sys.sleep()">😴 Sleep</button>
+    <button onclick="sys.reset()">🔄 Reset</button>
+</div>
+
+<div class="container">
+    <div id="tasks"></div>
+    <div class="graph">
+        <canvas id="chart"></canvas>
+    </div>
+</div>
+
+<script>
+class PowerSched {
+
+constructor(){
+    this.tasks=[];
+    this.freq=1.0;
+    this.temp=30;
+    this.energy=0;
+    this.running=true;
+    this.mode="balanced";
+    this.history=[];
+    this.loop();
+}
+
+/* ADD TASK */
+addTask(){
+    this.tasks.push({
+        id:Date.now(),
+        burst:Math.floor(Math.random()*10)+3,
+        remaining:100,
+        state:"idle",
+        core:"-"
+    });
+}
+
+/* PREDICTION */
+predict(task){
+    return task.burst;
+}
+
+/* SCHEDULER */
+schedule(){
+    this.tasks.sort((a,b)=>this.predict(b)-this.predict(a));
+
+    this.tasks.forEach((t,i)=>{
+        let load=this.predict(t);
+
+        if(i===0){
+            t.state="running";
+            t.core = load>6 ? "BIG" : "LITTLE";
+        }
+        else if(i===1){
+            t.state="waiting";
+            t.core="LITTLE";
+        }
+        else{
+            t.state="idle";
+            t.core="-";
+        }
+    });
+}
+
+/* DVFS */
+dvfs(){
+    if(this.mode==="performance"){
+        this.freq=2.8;
+    }
+    else if(this.mode==="sleep"){
+        this.freq=0.5;
+    }
+    else{
+        let load=this.tasks.filter(t=>t.state==="running").length;
+        this.freq=1.0 + load*0.8;
+    }
+}
+
+/* ENERGY */
+calcEnergy(){
+    this.energy = this.freq*this.freq*this.tasks.length;
+}
+
+/* THERMAL */
+thermal(){
+    this.temp += this.energy*0.02;
+
+    if(this.temp>85){
+        this.freq=1.0;
+    }
+}
+
+/* UPDATE */
+update(){
+    if(!this.running) return;
+
+    this.schedule();
+    this.dvfs();
+    this.calcEnergy();
+    this.thermal();
+
+    this.tasks.forEach(t=>{
+        if(t.state==="running"){
+            t.remaining -= this.freq;
+        }
+        if(t.remaining<=0){
+            t.remaining=100;
+        }
+    });
+
+    this.history.push(this.energy);
+    if(this.history.length>50) this.history.shift();
+
+    document.getElementById("energy").innerText=this.energy.toFixed(2);
+    document.getElementById("temp").innerText=this.temp.toFixed(1);
+    document.getElementById("freq").innerText=this.freq.toFixed(2);
+
+    this.render();
+    this.draw();
+}
+
+/* UI */
+render(){
+    let div=document.getElementById("tasks");
+    div.innerHTML="";
+
+    this.tasks.forEach((t,i)=>{
+        div.innerHTML+=`
+        <div class="task ${t.state}">
+            Task ${i+1}<br>
+            Core: ${t.core}<br>
+            State: ${t.state}<br>
+            Remaining: ${t.remaining.toFixed(0)}%
+        </div>`;
+    });
+}
+
+/* GRAPH */
+draw(){
+    let c=document.getElementById("chart");
+    let ctx=c.getContext("2d");
+
+    c.width=c.clientWidth;
+    c.height=c.clientHeight;
+
+    ctx.clearRect(0,0,c.width,c.height);
+    ctx.strokeStyle="#00ff9c";
+    ctx.beginPath();
+
+    this.history.forEach((v,i)=>{
+        let x=i*(c.width/50);
+        let y=c.height-(v*10);
+        if(i===0) ctx.moveTo(x,y);
+        else ctx.lineTo(x,y);
+    });
+
+    ctx.stroke();
+}
+
+/* LOOP */
+loop(){
+    this.update();
+    requestAnimationFrame(()=>this.loop());
+}
+
+start(){ this.running=true; }
+stop(){ this.running=false; }
+performance(){ this.mode="performance"; }
+sleep(){ this.mode="sleep"; }
+
+reset(){
+    this.tasks=[];
+    this.history=[];
+    this.temp=30;
+}
+}
+
+let sys=new PowerSched();
+</script>
+
+</body>
+</html>
